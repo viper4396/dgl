@@ -233,7 +233,7 @@ install_requires = [
 ]
 
 setup(
-    name="dgl" + os.getenv("DGL_PACKAGE_SUFFIX", ""),
+    name="TurboGNN" + os.getenv("DGL_PACKAGE_SUFFIX", ""),
     version=VERSION,
     description="Deep Graph Library",
     zip_safe=False,
