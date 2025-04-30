@@ -118,10 +118,11 @@ __global__ void _CSRRowWiseSampleUniformKernel(
     const IdType* const in_rows, const IdType* const in_ptr,
     const IdType* const in_index, const IdType* const data,
     const IdType* const out_ptr, IdType* const out_rows, IdType* const out_cols,
-    IdType* const out_idxs) {
+    IdType* const out_idxs, const bool shared_flag) {
   // we assign one warp per row
   assert(blockDim.x == BLOCK_SIZE);
 
+  extern __shared__ IdType sm_sampled_result[];
   int64_t out_row = blockIdx.x * TILE_SIZE;
   const int64_t last_row =
       min(static_cast<int64_t>(blockIdx.x + 1) * TILE_SIZE, num_rows);
@@ -146,7 +147,10 @@ __global__ void _CSRRowWiseSampleUniformKernel(
     } else {
       // generate permutation list via reservoir algorithm
       for (int idx = threadIdx.x; idx < num_picks; idx += BLOCK_SIZE) {
-        out_idxs[out_row_start + idx] = idx;
+        if(!shared_flag)
+          out_idxs[out_row_start + idx] = idx;
+        else 
+          sm_sampled_result[out_row_start + idx]=idx;
       }
       __syncthreads();
 
@@ -155,14 +159,21 @@ __global__ void _CSRRowWiseSampleUniformKernel(
         if (num < num_picks) {
           // use max so as to achieve the replacement order the serial
           // algorithm would have
-          AtomicMax(out_idxs + out_row_start + num, idx);
+          if(!shared_flag)
+            AtomicMax(out_idxs + out_row_start + num, idx);
+          else
+            AtomicMax(sm_sampled_result + out_row_start + num, idx);
         }
       }
       __syncthreads();
 
       // copy permutation over
       for (int idx = threadIdx.x; idx < num_picks; idx += BLOCK_SIZE) {
-        const IdType perm_idx = out_idxs[out_row_start + idx] + in_row_start;
+        const IdType perm_idx;
+        if(!shared_flag)
+          perm_idx= out_idxs[out_row_start + idx] + in_row_start;
+        else
+          perm_idx=sm_sampled_result[out_row_start + idx] + in_row_start;
         out_rows[out_row_start + idx] = row;
         out_cols[out_row_start + idx] = in_index[perm_idx];
         out_idxs[out_row_start + idx] = data ? data[perm_idx] : perm_idx;
@@ -234,7 +245,7 @@ __global__ void _CSRRowWiseSampleUniformReplaceKernel(
 
 template <DGLDeviceType XPU, typename IdType>
 COOMatrix _CSRRowWiseSamplingUniform(
-    CSRMatrix mat, IdArray rows, const int64_t num_picks, const bool replace) {
+    CSRMatrix mat, IdArray rows, const int64_t num_picks, const bool replace, const bool shared_flag) {
   const auto& ctx = rows->ctx;
   auto device = runtime::DeviceAPI::Get(ctx);
   cudaStream_t stream = runtime::getCurrentCUDAStream();
@@ -266,13 +277,13 @@ COOMatrix _CSRRowWiseSamplingUniform(
     const dim3 grid((num_rows + block.x - 1) / block.x);
     CUDA_KERNEL_CALL(
         _CSRRowWiseSampleDegreeReplaceKernel, grid, block, 0, stream, num_picks,
-        num_rows, slice_rows, in_ptr, out_deg);
+        num_rows, sorted_rows, in_ptr, out_deg);
   } else {
     const dim3 block(512);
     const dim3 grid((num_rows + block.x - 1) / block.x);
     CUDA_KERNEL_CALL(
         _CSRRowWiseSampleDegreeKernel, grid, block, 0, stream, num_picks,
-        num_rows, slice_rows, in_ptr, out_deg);
+        num_rows, sorted_rows, in_ptr, out_deg);
   }
 
   // fill out_ptr
@@ -322,9 +333,9 @@ COOMatrix _CSRRowWiseSamplingUniform(
     const dim3 block(BLOCK_SIZE);
     const dim3 grid((num_rows + TILE_SIZE - 1) / TILE_SIZE);
     CUDA_KERNEL_CALL(
-        (_CSRRowWiseSampleUniformKernel<IdType, TILE_SIZE>), grid, block, 0,
+        (_CSRRowWiseSampleUniformKernel<IdType, TILE_SIZE>), grid, block, sizeof(IdType) * num_rows * num_picks,
         stream, random_seed, num_picks, num_rows, slice_rows, in_ptr, in_cols,
-        data, out_ptr, out_rows, out_cols, out_idxs);
+        data, out_ptr, out_rows, out_cols, out_idxs, shared_flag);
   }
   device->FreeWorkspace(ctx, out_ptr);
 
@@ -341,6 +352,32 @@ COOMatrix _CSRRowWiseSamplingUniform(
       mat.num_rows, mat.num_cols, picked_row, picked_col, picked_idx);
 }
 
+template <typename IdType, int TILE_SIZE>
+void processRows(
+  const IdType* const rows,IdType* const out_rows,const int64_t num_rows,
+  const int64_t block_threshold){
+  int block_nums=(num_rows + TILE_SIZE - 1) / TILE_SIZE;
+  int warp_nums=BLOCK_SIZE/32;
+  if(num_rows<block_threshold){
+    for(int i=0;i<num_rows;++i){
+      int block_index=i%block_nums;
+      int index=i/block_nums;
+      if(index%2==1)
+        block_index=block_nums-block_index-1;
+      out_rows[block_index*TILE_SIZE+index]=rows[i];
+    }
+  } else {
+    for(int i=0;i<num_rows;++i){
+      int block_index=i/TILE_SIZE;
+      int warp_index=(i-block_index*TILE_SIZE)%warp_nums;
+      int index=(i-block_index*TILE_SIZE)/warp_nums;
+      if(index%2==1)
+        warp_index=warp_nums-warp_index-1;
+      out_rows[block_index*TILE_SIZE+warp_index*TILE_SIZE/warp_nums+index];
+    }
+  }
+}
+
 template <DGLDeviceType XPU, typename IdType>
 COOMatrix CSRRowWiseSamplingUniform(
     CSRMatrix mat, IdArray rows, const int64_t num_picks, const bool replace) {
@@ -351,8 +388,76 @@ COOMatrix CSRRowWiseSamplingUniform(
     return COOMatrix(
         mat.num_rows, mat.num_cols, sliced_rows, coo.col, coo.data);
   } else {
-    return _CSRRowWiseSamplingUniform<XPU, IdType>(
-        mat, rows, num_picks, replace);
+    // get ctx
+    const auto& ctx = rows->ctx;
+    auto device = runtime::DeviceAPI::Get(ctx);
+    cudaStream_t stream = runtime::getCurrentCUDAStream();
+    const int64_t num_rows = rows->shape[0];
+    const IdType* const slice_rows = static_cast<const IdType*>(rows->data);
+    IdType* const sorted_rows = static_cast<const IdType*>(rows->data);
+    const IdType* in_ptr = static_cast<IdType*>(GetDevicePointer(mat.indptr));
+
+    //sorted vertex
+    IdType* degrees = static_cast<IdType*>(
+      device->AllocWorkspace(ctx, num_rows * sizeof(IdType)));
+    for(int i=0;i<num_rows;++i){
+      IdType vertex=slice_rows[i];
+      degrees[i]=in_ptr[vertex]-in_ptr[vertex+1];
+    }
+    IdType* sorted_degrees = static_cast<IdType*>(
+      device->AllocWorkspace(ctx, num_rows * sizeof(IdType)));
+    size_t temp_storage_size=0;
+    void* temp_storage=nullptr;
+    CUDA_CALL(cub::DeviceRadixSort::SortPairs(
+      temp_storage, temp_storage_size, degrees, sorted_degrees, slice_rows, sorted_rows, num_rows, stream));
+    temp_storage=device->AllocWorkspace(ctx, temp_storage_size);
+    CUDA_CALL(cub::DeviceRadixSort::SortPairs(
+      temp_storage, temp_storage_size, degrees, sorted_degrees, slice_rows, sorted_rows, num_rows, stream));
+    device->FreeWorkspace(ctx, temp_storage);
+    device->FreeWorkspace(ctx, degrees);
+
+    //divide two partion
+    const size_t degree_threshold=-100;
+    size_t high_degree_num=0;
+    for(int i=0;i<num_rows;i++){
+      if(sorted_degress[i]<=degree_threshold)
+        high_degree_num++;
+      else break;
+    }
+
+    IdType* const high_degree_rows = static_cast<IdType*>(
+      device->AllocWorkspace(ctx, high_degree_num * sizeof(IdType)));
+    IdType* const low_degree_rows = static_cast<IdType*>(
+      device->AllocWorkspace(ctx, (num_rows-high_degree_num) * sizeof(IdType)));
+    for(int i=0;i<num_rows;i++){
+      if(sorted_degrees[i]<=degree_threshold)
+        high_degree_rows[i]=sorted_rows[i];
+      else
+        low_degree_rows[i-high_degree_num]=sorted_rows[i];
+    }
+
+    //block schedule
+    IdType* const rows1 = static_cast<IdType*>(
+      device->AllocWorkspace(ctx, high_degree_num * sizeof(IdType)));
+    IdType* const rows2 = static_cast<IdType*>(
+      device->AllocWorkspace(ctx, (num_rows-high_degree_num) * sizeof(IdType)));
+    constexpr int TILE_SIZE = 128 / BLOCK_SIZE;
+    processRows<IdType,TILE_SIZE>(
+      high_degree_rows,rows1,high_degree_num,256);
+    processRows<IdType,TILE_SIZE>(
+      low_degree_rows,rows2,num_rows-high_degree_num,256);
+    device->FreeWorkspace(ctx, sorted_degrees);
+    device->FreeWorkspace(ctx, high_degree_rows);
+    device->FreeWorkspace(ctx, low_degree_rows);
+
+    // 采样图
+    res1= _CSRRowWiseSamplingUniform<XPU, IdType>(
+      mat, rows1, num_picks, replace, true);
+    res2= _CSRRowWiseSamplingUniform<XPU, IdType>(
+      mat, rows2, num_picks, replace, false);
+
+    //合并图
+    return res1.UnionCoo(res2);
   }
 }
 
