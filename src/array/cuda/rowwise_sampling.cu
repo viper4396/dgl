@@ -454,20 +454,22 @@ COOMatrix CSRRowWiseSamplingUniform(
     device->FreeWorkspace(ctx, low_degree_rows);
 
     // 采样图
-    NDArray sampled_rows=NDArray::Empty(
-        {1}, DGLDataTypeTraits<IdType>::dtype, DGLContext{kDGLCUDA, 0});
+    NDArray sampled_rows1=NDArray::Empty(
+        {high_degree_num}, DGLDataTypeTraits<IdType>::dtype, DGLContext{kDGLCUDA, 0});
     CUDA_CALL(cudaMemcpyAsync(
-      sampled_rows->data, rows1, sizeof(IdType),
+      sampled_rows1->data, rows1, sizeof(IdType)*high_degree_num,
       cudaMemcpyHostToDevice, stream));
     device->FreeWorkspace(ctx, rows1);
     COOMatrix res1= _CSRRowWiseSamplingUniform<XPU, IdType>(
-      mat, sampled_rows, num_picks, replace, true);
+      mat, sampled_rows1, num_picks, replace, true);
+    NDArray sampled_rows2=NDArray::Empty(
+        {num_rows-high_degree_num}, DGLDataTypeTraits<IdType>::dtype, DGLContext{kDGLCUDA, 0});
     CUDA_CALL(cudaMemcpyAsync(
-      sampled_rows->data, rows2, sizeof(IdType),
+      sampled_rows2->data, rows2, sizeof(IdType)*(num_rows-high_degree_num),
       cudaMemcpyHostToDevice, stream));
     device->FreeWorkspace(ctx, rows2);
     COOMatrix res2= _CSRRowWiseSamplingUniform<XPU, IdType>(
-      mat, sampled_rows, num_picks, replace, false);
+      mat, sampled_rows2, num_picks, replace, false);
     std::vector<COOMatrix> coos;
     coos.push_back(res1);
     coos.push_back(res2);
