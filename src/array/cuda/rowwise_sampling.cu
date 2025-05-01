@@ -277,13 +277,13 @@ COOMatrix _CSRRowWiseSamplingUniform(
     const dim3 grid((num_rows + block.x - 1) / block.x);
     CUDA_KERNEL_CALL(
         _CSRRowWiseSampleDegreeReplaceKernel, grid, block, 0, stream, num_picks,
-        num_rows, sorted_rows, in_ptr, out_deg);
+        num_rows, slice_rows, in_ptr, out_deg);
   } else {
     const dim3 block(512);
     const dim3 grid((num_rows + block.x - 1) / block.x);
     CUDA_KERNEL_CALL(
         _CSRRowWiseSampleDegreeKernel, grid, block, 0, stream, num_picks,
-        num_rows, sorted_rows, in_ptr, out_deg);
+        num_rows, slice_rows, in_ptr, out_deg);
   }
 
   // fill out_ptr
@@ -394,7 +394,8 @@ COOMatrix CSRRowWiseSamplingUniform(
     cudaStream_t stream = runtime::getCurrentCUDAStream();
     const int64_t num_rows = rows->shape[0];
     const IdType* const slice_rows = static_cast<const IdType*>(rows->data);
-    IdType* const sorted_rows = static_cast<const IdType*>(rows->data);
+    IdType* const sorted_rows = static_cast<IdType*>(
+      device->AllocWorkspace(ctx, num_rows * sizeof(IdType)));
     const IdType* in_ptr = static_cast<IdType*>(GetDevicePointer(mat.indptr));
 
     //sorted vertex
@@ -420,7 +421,7 @@ COOMatrix CSRRowWiseSamplingUniform(
     const size_t degree_threshold=-100;
     size_t high_degree_num=0;
     for(int i=0;i<num_rows;i++){
-      if(sorted_degress[i]<=degree_threshold)
+      if(sorted_degrees[i]<=degree_threshold)
         high_degree_num++;
       else break;
     }
@@ -446,14 +447,15 @@ COOMatrix CSRRowWiseSamplingUniform(
       high_degree_rows,rows1,high_degree_num,256);
     processRows<IdType,TILE_SIZE>(
       low_degree_rows,rows2,num_rows-high_degree_num,256);
+    device->FreeWorkspace(ctx, sorted_rows);
     device->FreeWorkspace(ctx, sorted_degrees);
     device->FreeWorkspace(ctx, high_degree_rows);
     device->FreeWorkspace(ctx, low_degree_rows);
 
     // 采样图
-    res1= _CSRRowWiseSamplingUniform<XPU, IdType>(
+    COOMatrix res1= _CSRRowWiseSamplingUniform<XPU, IdType>(
       mat, rows1, num_picks, replace, true);
-    res2= _CSRRowWiseSamplingUniform<XPU, IdType>(
+    COOMatrix res2= _CSRRowWiseSamplingUniform<XPU, IdType>(
       mat, rows2, num_picks, replace, false);
 
     //合并图
