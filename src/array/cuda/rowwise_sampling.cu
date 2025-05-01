@@ -11,6 +11,7 @@
 
 #include <cub/cub.cuh>
 #include <numeric>
+#include<vector>
 
 #include "../../array/cuda/atomic.cuh"
 #include "../../runtime/cuda/cuda_common.h"
