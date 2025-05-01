@@ -240,6 +240,34 @@ __global__ void _CSRRowWiseSampleUniformReplaceKernel(
   }
 }
 
+template <typename IdType, int TILE_SIZE>
+void processRows(
+  const IdType* const rows,IdType* const out_rows,const int64_t num_rows,
+  const int64_t block_threshold){
+  
+  int block_nums=(num_rows + TILE_SIZE - 1) / TILE_SIZE;
+  constexpr int BLOCK_SIZE = 128;
+  int warp_nums=BLOCK_SIZE/32;
+  if(num_rows<block_threshold){
+    for(int i=0;i<num_rows;++i){
+      int block_index=i%block_nums;
+      int index=i/block_nums;
+      if(index%2==1)
+        block_index=block_nums-block_index-1;
+      out_rows[block_index*TILE_SIZE+index]=rows[i];
+    }
+  } else {
+    for(int i=0;i<num_rows;++i){
+      int block_index=i/TILE_SIZE;
+      int warp_index=(i-block_index*TILE_SIZE)%warp_nums;
+      int index=(i-block_index*TILE_SIZE)/warp_nums;
+      if(index%2==1)
+        warp_index=warp_nums-warp_index-1;
+      out_rows[block_index*TILE_SIZE+warp_index*TILE_SIZE/warp_nums+index]=rows[i];
+    }
+  }
+}
+
 }  // namespace
 
 ///////////////////////////// CSR sampling //////////////////////////
@@ -277,13 +305,13 @@ COOMatrix _CSRRowWiseSamplingUniform(
     const dim3 block(512);
     const dim3 grid((num_rows + block.x - 1) / block.x);
     CUDA_KERNEL_CALL(
-        _CSRRowWiseSampleDegreeReplaceKernel, grid, block, 0, stream, num_picks,
+        tempsample::_CSRRowWiseSampleDegreeReplaceKernel, grid, block, 0, stream, num_picks,
         num_rows, slice_rows, in_ptr, out_deg);
   } else {
     const dim3 block(512);
     const dim3 grid((num_rows + block.x - 1) / block.x);
     CUDA_KERNEL_CALL(
-        _CSRRowWiseSampleDegreeKernel, grid, block, 0, stream, num_picks,
+        tempsample::_CSRRowWiseSampleDegreeKernel, grid, block, 0, stream, num_picks,
         num_rows, slice_rows, in_ptr, out_deg);
   }
 
@@ -322,6 +350,7 @@ COOMatrix _CSRRowWiseSamplingUniform(
 
   // select edges
   // the number of rows each thread block will cover
+  constexpr int BLOCK_SIZE = 128;
   constexpr int TILE_SIZE = 128 / BLOCK_SIZE;
   if (replace) {  // with replacement
     const dim3 block(BLOCK_SIZE);
@@ -351,32 +380,6 @@ COOMatrix _CSRRowWiseSamplingUniform(
 
   return COOMatrix(
       mat.num_rows, mat.num_cols, picked_row, picked_col, picked_idx);
-}
-
-template <typename IdType, int TILE_SIZE>
-void processRows(
-  const IdType* const rows,IdType* const out_rows,const int64_t num_rows,
-  const int64_t block_threshold){
-  int block_nums=(num_rows + TILE_SIZE - 1) / TILE_SIZE;
-  int warp_nums=BLOCK_SIZE/32;
-  if(num_rows<block_threshold){
-    for(int i=0;i<num_rows;++i){
-      int block_index=i%block_nums;
-      int index=i/block_nums;
-      if(index%2==1)
-        block_index=block_nums-block_index-1;
-      out_rows[block_index*TILE_SIZE+index]=rows[i];
-    }
-  } else {
-    for(int i=0;i<num_rows;++i){
-      int block_index=i/TILE_SIZE;
-      int warp_index=(i-block_index*TILE_SIZE)%warp_nums;
-      int index=(i-block_index*TILE_SIZE)/warp_nums;
-      if(index%2==1)
-        warp_index=warp_nums-warp_index-1;
-      out_rows[block_index*TILE_SIZE+warp_index*TILE_SIZE/warp_nums+index]=rows[i];
-    }
-  }
 }
 
 template <DGLDeviceType XPU, typename IdType>
@@ -443,10 +446,11 @@ COOMatrix CSRRowWiseSamplingUniform(
       device->AllocWorkspace(ctx, high_degree_num * sizeof(IdType)));
     IdType* const rows2 = static_cast<IdType*>(
       device->AllocWorkspace(ctx, (num_rows-high_degree_num) * sizeof(IdType)));
+    constexpr int BLOCK_SIZE = 128;
     constexpr int TILE_SIZE = 128 / BLOCK_SIZE;
-    processRows<IdType,TILE_SIZE>(
+    tempsample::processRows<IdType,TILE_SIZE>(
       high_degree_rows,rows1,high_degree_num,256);
-    processRows<IdType,TILE_SIZE>(
+    tempsample::processRows<IdType,TILE_SIZE>(
       low_degree_rows,rows2,num_rows-high_degree_num,256);
     device->FreeWorkspace(ctx, sorted_rows);
     device->FreeWorkspace(ctx, sorted_degrees);
