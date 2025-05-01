@@ -457,9 +457,12 @@ COOMatrix CSRRowWiseSamplingUniform(
       mat, rows1, num_picks, replace, true);
     COOMatrix res2= _CSRRowWiseSamplingUniform<XPU, IdType>(
       mat, rows2, num_picks, replace, false);
+    std::vector<COOMatrix> coos;
+    coos.push_back(res1);
+    coos.push_back(res2);
 
     //合并图
-    return res1.UnionCoo(res2);
+    return aten::UnionCoo(coos);
   }
 }
 
