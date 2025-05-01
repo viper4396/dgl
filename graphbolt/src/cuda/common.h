@@ -59,7 +59,7 @@ struct CUDAWorkspaceAllocator {
   using value_type = value_t;
 
   explicit CUDAWorkspaceAllocator() {
-    at::globalContext().lazyInitDevice(at::kCUDA);
+    at::globalContext().lazyInitCUDA();
   }
 
   template <class U>
