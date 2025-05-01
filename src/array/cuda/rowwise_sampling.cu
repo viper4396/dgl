@@ -454,10 +454,20 @@ COOMatrix CSRRowWiseSamplingUniform(
     device->FreeWorkspace(ctx, low_degree_rows);
 
     // 采样图
+    NDArray sampled_rows=NDArray::Empty(
+        {1}, DGLDataTypeTraits<IdType>::dtype, DGLContext{kDGLCUDA, 0});
+    CUDA_CALL(cudaMemcpyAsync(
+      sampled_rows->data, rows1, sizeof(IdType),
+      cudaMemcpyHostToDevice, stream));
+    device->FreeWorkspace(ctx, rows1);
     COOMatrix res1= _CSRRowWiseSamplingUniform<XPU, IdType>(
-      mat, rows1, num_picks, replace, true);
+      mat, sampled_rows, num_picks, replace, true);
+    CUDA_CALL(cudaMemcpyAsync(
+      sampled_rows->data, rows2, sizeof(IdType),
+      cudaMemcpyHostToDevice, stream));
+    device->FreeWorkspace(ctx, rows2);
     COOMatrix res2= _CSRRowWiseSamplingUniform<XPU, IdType>(
-      mat, rows2, num_picks, replace, false);
+      mat, sampled_rows, num_picks, replace, false);
     std::vector<COOMatrix> coos;
     coos.push_back(res1);
     coos.push_back(res2);
