@@ -25,7 +25,7 @@ namespace dgl {
 namespace aten {
 namespace impl {
 
-namespace {
+namespace tempsample{
 
 constexpr int BLOCK_SIZE = 128;
 
@@ -327,14 +327,14 @@ COOMatrix _CSRRowWiseSamplingUniform(
     const dim3 block(BLOCK_SIZE);
     const dim3 grid((num_rows + TILE_SIZE - 1) / TILE_SIZE);
     CUDA_KERNEL_CALL(
-        (_CSRRowWiseSampleUniformReplaceKernel<IdType, TILE_SIZE>), grid, block,
+        (tempsample::_CSRRowWiseSampleUniformReplaceKernel<IdType, TILE_SIZE>), grid, block,
         0, stream, random_seed, num_picks, num_rows, slice_rows, in_ptr,
         in_cols, data, out_ptr, out_rows, out_cols, out_idxs);
   } else {  // without replacement
     const dim3 block(BLOCK_SIZE);
     const dim3 grid((num_rows + TILE_SIZE - 1) / TILE_SIZE);
     CUDA_KERNEL_CALL(
-        (_CSRRowWiseSampleUniformKernel<IdType, TILE_SIZE>), grid, block, sizeof(IdType) * num_rows * num_picks,
+        (tempsample::_CSRRowWiseSampleUniformKernel<IdType, TILE_SIZE>), grid, block, sizeof(IdType) * num_rows * num_picks,
         stream, random_seed, num_picks, num_rows, slice_rows, in_ptr, in_cols,
         data, out_ptr, out_rows, out_cols, out_idxs, shared_flag);
   }
