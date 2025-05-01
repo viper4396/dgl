@@ -411,10 +411,10 @@ COOMatrix CSRRowWiseSamplingUniform(
     size_t temp_storage_size=0;
     void* temp_storage=nullptr;
     CUDA_CALL(cub::DeviceRadixSort::SortPairs(
-      temp_storage, temp_storage_size, degrees, sorted_degrees, slice_rows, sorted_rows, num_rows, stream));
+      temp_storage, temp_storage_size, degrees, sorted_degrees, slice_rows, sorted_rows, num_rows, stream=stream));
     temp_storage=device->AllocWorkspace(ctx, temp_storage_size);
     CUDA_CALL(cub::DeviceRadixSort::SortPairs(
-      temp_storage, temp_storage_size, degrees, sorted_degrees, slice_rows, sorted_rows, num_rows, stream));
+      temp_storage, temp_storage_size, degrees, sorted_degrees, slice_rows, sorted_rows, num_rows, stream=stream));
     device->FreeWorkspace(ctx, temp_storage);
     device->FreeWorkspace(ctx, degrees);
 
