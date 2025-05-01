@@ -418,10 +418,10 @@ COOMatrix CSRRowWiseSamplingUniform(
     device->FreeWorkspace(ctx, degrees);
 
     //divide two partion
-    const size_t degree_threshold=-100;
+    const size_t degree_threshold=100;
     size_t high_degree_num=0;
     for(int i=0;i<num_rows;i++){
-      if(sorted_degrees[i]<=degree_threshold)
+      if(sorted_degrees[i]<=-1*degree_threshold)
         high_degree_num++;
       else break;
     }
