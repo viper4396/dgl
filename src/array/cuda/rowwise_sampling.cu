@@ -170,7 +170,7 @@ __global__ void _CSRRowWiseSampleUniformKernel(
 
       // copy permutation over
       for (int idx = threadIdx.x; idx < num_picks; idx += BLOCK_SIZE) {
-        const IdType perm_idx;
+        IdType perm_idx;
         if(!shared_flag)
           perm_idx= out_idxs[out_row_start + idx] + in_row_start;
         else
@@ -374,7 +374,7 @@ void processRows(
       int index=(i-block_index*TILE_SIZE)/warp_nums;
       if(index%2==1)
         warp_index=warp_nums-warp_index-1;
-      out_rows[block_index*TILE_SIZE+warp_index*TILE_SIZE/warp_nums+index];
+      out_rows[block_index*TILE_SIZE+warp_index*TILE_SIZE/warp_nums+index]=rows[i];
     }
   }
 }
