@@ -123,7 +123,7 @@ __global__ void _CSRRowWiseSampleUniformKernel(
   // we assign one warp per row
   assert(blockDim.x == BLOCK_SIZE);
 
-  extern __shared__ IdType sm_sampled_result[];
+  extern __shared__ int64_t sm_sampled_result[];
   int64_t out_row = blockIdx.x * TILE_SIZE;
   const int64_t last_row =
       min(static_cast<int64_t>(blockIdx.x + 1) * TILE_SIZE, num_rows);
